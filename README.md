@@ -1,4 +1,4 @@
-# API余额查询（MaiBot 插件）
+# 麦麦钱包（MaiBot 插件）
 
 为麦麦（MaiBot）框架的插件，用于获取指定 API Key 的账户余额：
 
@@ -65,7 +65,7 @@ lines = [
 - `balance.llm_url`：**模型接口 URL**。支持 `{model}` 占位符替换（用于模型名需出现在 URL 中的平台，如 Gemini：`https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent`）。**OpenAI 兼容系列（openai/deepseek/xai/mistral/huggingface/baidu）会自动补全 `/chat/completions`**：可填基础地址（如 `https://api.commandcode.ai/provider/v1`，自动补全为 `/provider/v1/chat/completions`）或完整端点（如 `https://api.deepseek.com/chat/completions`，直接使用）；非 OpenAI 兼容系列（anthropic/gemini/cohere）原样使用。注意：**余额查询接口（`api_url`）与模型接口是不同的 API**，需单独设置；默认指向 DeepSeek 开放平台模型接口。
 - `balance.auth_header`：认证方式，格式为 `请求头名: 前缀`（余额接口 GET、模型接口 POST，共用此认证方式），默认 `Authorization: Bearer`（即发送 `Authorization: Bearer <API_KEY>`）。若平台要求请求头直接填 API Key（无前缀），写成 `自定义请求头名:` 即可（前缀留空）。
 - `balance.max_tokens`：控制 LLM 总结时输出的最大 token 数（默认 4096；仅在 `send_max_tokens` 为 `true` 时发送）。
-- `balance.send_max_tokens`：是否在模型请求体中发送 `max_tokens` 参数（默认 `false`，不发送，由平台自动决定输出长度）。**部分上游模型不接受 `max_tokens`**（实测 Command Code 的 `poolside/laguna-s-2.1-free` 带上 `max_tokens` 会返回 `503 overloaded_error`）；而**倝考模型**（如 `tencent/hy3-paid`）在 `max_tokens` 过小时思考占满上限会被截断。默认关闭可规避这两类问题（Anthropic Messages API 的 `max_tokens` 为必填字段，开关关闭时仍会发送，使用 `max_tokens` 配置值兜底）。
+- `balance.send_max_tokens`：是否在模型请求体中发送 `max_tokens` 参数（默认 `false`，不发送，由平台自动决定输出长度）。**部分上游模型不接受 `max_tokens`**（实测 Command Code 的 `poolside/laguna-s-2.1-free` 带上 `max_tokens` 会返回 `503 overloaded_error`）；而**思考模型**（如 `tencent/hy3-paid`）在 `max_tokens` 过小时思考占满上限会被截断。默认关闭可规避这两类问题（Anthropic Messages API 的 `max_tokens` 为必填字段，开关关闭时仍会发送，使用 `max_tokens` 配置值兜底）。
 - `balance.llm_timeout`：LLM 总结超时时间（秒，默认 60）。超时后：指令查询通过 QQ 信息返回错误（控制台也打印日志）；工具调用仅在控制台打印错误日志。
 - `balance.cache_minutes`：**工具调用获取余额的缓存间隔**（分钟，默认 120，即 2 小时）。工具调用时若距上次获取未超过该间隔，直接使用本地缓存数据（AI 总结 + 原始 JSON，持久化于 `data/plugins/cateye_api_balance/wallet_cache.json`）；超过才调用 API 重新获取并更新缓存。**即使超期插件也不会主动更新**，只有工具被调用且发现需要更新时才更新。指令 `/wallet` 始终实时获取并覆盖缓存。
 - `prompt.lines`：总结提示词，**每一项为一行**，WebUI 中为可添加多项的配置项（如 `super_admins = ["1507674097"]` 的列表写法），代码读取时自动分行拼接。**尾部的「JSON数据：」与 `{json_data}`（接口返回的余额 JSON）不写进配置项**，由代码在拼接后自动补充。
@@ -76,7 +76,7 @@ lines = [
 `client_type` 决定**模型接口的请求体格式与响应解析**，`llm_url` 为**模型接口 URL（OpenAI 兼容系列自动补全 `/chat/completions`，其余原样使用）**，`auth_header` 决定**认证方式**，三者自由组合，可跑通大部分 API 平台：
 
 | 平台 | 标准认证方式 | 你的系统中需要配置 |
-|------|--------------|------------------|
+|------|-------------|-------------------|
 | OpenAI | `Authorization: Bearer <API_KEY>` | 客户端类型: `openai`<br>认证头: `Authorization: Bearer` |
 | Anthropic (Claude) | `x-api-key: <API_KEY>` | 客户端类型: `anthropic`<br>认证头: `x-api-key` |
 | Google Gemini (API Key模式) | `x-goog-api-key: <API_KEY>` | 客户端类型: `gemini`<br>认证头: `x-goog-api-key` |
