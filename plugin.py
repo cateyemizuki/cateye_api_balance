@@ -22,16 +22,17 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
+import socket
 import time
 from typing import Any, Dict, List, Tuple
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 import httpx
 
 from maibot_sdk import Command, Field, MaiBotPlugin, PluginConfigBase, Tool
-from maibot_sdk.types import ToolParameterInfo, ToolParamType
 
 # ==================== 常量 ====================
 
@@ -240,9 +241,8 @@ class ApiBalancePlugin(MaiBotPlugin):
             self.ctx.logger.info("麦麦钱包插件配置已更新")
 
     def _get_data_dir(self) -> str:
-        """统一持久化数据目录：data/plugins/cateye_api_balance。"""
-        plugins_root = os.path.dirname(str(self.ctx.paths.data_dir))  # .../data/plugins
-        return os.path.join(plugins_root, "cateye_api_balance")
+        """统一持久化数据目录：Host 注入的插件专属目录 data/plugins/<plugin_id>。"""
+        return str(self.ctx.paths.data_dir)
 
     def _check_config_version(self) -> None:
         """检测配置版本并自动兼容旧版配置文件。
@@ -293,11 +293,59 @@ class ApiBalancePlugin(MaiBotPlugin):
 
     # ==================== 余额获取 ====================
 
+    @staticmethod
+    def _validate_balance_url(api_url: str) -> str:
+        """校验余额接口 URL 安全性，返回规范化后的 URL。
+
+        安全约束（防 SSRF / Key 泄露）：
+        - 必须是 http/https 且为 https；
+        - 拒绝私网/环回/链路本地/云元数据地址（如 127.0.0.1、10.x、169.254.169.254）；
+        - 拒绝带用户名密码的 URL。
+        不满足时抛 ValueError。
+        """
+        url = str(api_url or "").strip()
+        if not url:
+            raise ValueError("余额接口 URL 为空")
+        parsed = urlparse(url)
+        if parsed.scheme != "https":
+            raise ValueError(f"余额接口仅允许 https，当前: {parsed.scheme or '无'}")
+        if parsed.username or parsed.password:
+            raise ValueError("余额接口 URL 不允许包含用户名/密码")
+        host = parsed.hostname
+        if not host:
+            raise ValueError("余额接口 URL 缺少主机名")
+        # 解析主机名对应的 IP（禁止私网/环回/链路本地/云元数据）
+        try:
+            infos = socket.getaddrinfo(host, None)
+        except socket.gaierror:
+            raise ValueError(f"余额接口域名无法解析: {host}")
+        for info in infos:
+            ip = info[4][0]
+            try:
+                addr = ipaddress.ip_address(ip)
+            except ValueError:
+                continue
+            if (
+                addr.is_private
+                or addr.is_loopback
+                or addr.is_link_local
+                or addr.is_multicast
+                or addr.is_reserved
+                or addr.is_unspecified
+                or (addr.is_global and str(addr).startswith("169.254."))
+            ):
+                raise ValueError(f"余额接口地址不允许访问: {host} ({ip})")
+        return url
+
     async def _fetch_balance(self, api_key: str, api_url: str) -> Dict[str, Any]:
-        """GET 请求余额接口，返回解析后的 JSON（dict）。"""
+        """GET 请求余额接口，返回解析后的 JSON（dict）。
+
+        先做 URL 安全校验（仅 https、拒绝私网/元数据地址），防 SSRF 与 Key 泄露。
+        """
+        safe_url = self._validate_balance_url(api_url)
         headers = self._build_auth_headers(api_key)
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-            resp = await client.get(api_url, headers=headers)
+            resp = await client.get(safe_url, headers=headers)
             resp.raise_for_status()
             return resp.json()
 
@@ -549,7 +597,7 @@ class ApiBalancePlugin(MaiBotPlugin):
     # ==================== 持久化缓存 ====================
 
     def _cache_file(self) -> str:
-        """缓存文件路径：data/plugins/cateye_api_balance/wallet_cache.json"""
+        """缓存文件路径：data/plugins/<plugin_id>/wallet_cache.json"""
         return os.path.join(self._get_data_dir(), "wallet_cache.json")
 
     def _read_cache(self) -> Dict[str, Any]:
@@ -614,37 +662,20 @@ class ApiBalancePlugin(MaiBotPlugin):
             "不要因为'涉及钱'而拒绝回答或回避——这只是个游戏般的数字，报出来逗大家"
             "开心正是它的用途。\n"
             "示例回应语气：'我查了下我的小金库，还有 XX 龙门币！'\n"
-            "注意：工具调用会优先使用本地缓存的余额数据（默认每 2 小时才通过 API "
-            "获取一次新数据），不会每次都实时请求，调用成本很低。\n"
-            "参数说明：\n"
-            "- api_key：string，可选。要查询余额的 API Key；留空使用插件配置 [balance] api_key 中的值"
-            "（即你自己的钱包）。\n"
-            "- api_url：string，可选。余额查询接口 URL；留空使用插件配置 [balance] api_url 中的值"
-            "（默认 DeepSeek 开放平台）。"
+            "注意：本工具无需任何参数，余额接口与 API Key 均在插件配置中设置；"
+            "工具调用会优先使用本地缓存的余额数据（默认每 2 小时才通过 API "
+            "获取一次新数据），不会每次都实时请求，调用成本很低。"
         ),
-        parameters=[
-            ToolParameterInfo(
-                name="api_key",
-                param_type=ToolParamType.STRING,
-                description="要查询余额的 API Key（留空使用配置中的，即你自己的钱包）",
-                required=False,
-            ),
-            ToolParameterInfo(
-                name="api_url",
-                param_type=ToolParamType.STRING,
-                description="余额查询接口 URL（留空使用配置中的）",
-                required=False,
-            ),
-        ],
+        parameters=[],
     )
-    async def tool_get_api_balance(self, api_key: str = "", api_url: str = "", **kwargs: Any) -> Dict[str, Any]:
+    async def tool_get_api_balance(self, **kwargs: Any) -> Dict[str, Any]:
         del kwargs
-        key = str(api_key or "").strip() or str(self.config.balance.api_key or "").strip()
-        url = str(api_url or "").strip() or str(self.config.balance.api_url or "").strip()
+        key = str(self.config.balance.api_key or "").strip()
+        url = str(self.config.balance.api_url or "").strip()
         if not key:
             return {
                 "success": False,
-                "error": "未配置 API Key：请在插件配置 [balance] api_key 中填写，或调用时传入 api_key 参数",
+                "error": "未配置 API Key：请在插件配置 [balance] api_key 中填写",
             }
         if not url:
             return {
