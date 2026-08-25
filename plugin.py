@@ -1,4 +1,4 @@
-"""API 余额查询插件 — MaiBot v2 插件
+"""麦麦钱包插件 — MaiBot v2 插件
 
 功能：
 - 通过配置的余额接口（GET 请求）获取指定 API Key 的账户余额 JSON。
@@ -218,7 +218,7 @@ class ApiBalanceConfig(PluginConfigBase):
 
 
 class ApiBalancePlugin(MaiBotPlugin):
-    """API 余额查询插件。"""
+    """麦麦钱包插件。"""
 
     config_model = ApiBalanceConfig
 
@@ -228,16 +228,16 @@ class ApiBalancePlugin(MaiBotPlugin):
         self._check_config_version()
         data_dir = self._get_data_dir()
         os.makedirs(data_dir, exist_ok=True)
-        self.ctx.logger.info("API 余额查询插件已加载，缓存目录：%s", data_dir)
+        self.ctx.logger.info("麦麦钱包插件已加载，缓存目录：%s", data_dir)
 
     async def on_unload(self) -> None:
-        self.ctx.logger.info("API 余额查询插件已卸载")
+        self.ctx.logger.info("麦麦钱包插件已卸载")
 
     async def on_config_update(self, scope: str, config_data: Dict[str, Any], version: str) -> None:
         del config_data, version
         if scope == "self":
             self._check_config_version()
-            self.ctx.logger.info("API 余额查询插件配置已更新")
+            self.ctx.logger.info("麦麦钱包插件配置已更新")
 
     def _get_data_dir(self) -> str:
         """统一持久化数据目录：data/plugins/cateye_api_balance。"""
@@ -731,7 +731,7 @@ class ApiBalancePlugin(MaiBotPlugin):
         # 返回信息式结果：单条信息合并转发发出（声明了 send.forward 能力）
         msg = {
             "user_id": "0",
-            "nickname": "API余额",
+            "nickname": "麦麦钱包",
             "segments": [{"type": "text", "content": summary}],
         }
         try:
