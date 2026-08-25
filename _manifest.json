@@ -2,7 +2,7 @@
   "manifest_version": 2,
   "id": "github.cateye.api-balance",
   "version": "1.0.0",
-  "name": "API余额查询",
+  "name": "麦麦钱包",
   "description": "查询指定 API Key 的账户余额：通过配置的余额接口获取 JSON 数据，并使用 LLM 总结为清晰的中文报告；提供 /wallet 指令与 get_api_balance 工具。",
   "author": {
     "name": "cateye",
