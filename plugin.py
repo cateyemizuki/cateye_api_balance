@@ -15,6 +15,12 @@
   用户提及钱包余额、存款、饭钱等话题时调用。工具调用优先使用本地缓存
   （默认每 2 小时才通过 API 获取一次新数据，超期才实时刷新），返回不显示时间戳。
 
+配置结构（v1.0.1 起）：
+- [balance] 查询配置：查余额平台的 api_key / api_url；
+- [summary] 总结配置：LLM 总结平台的 api_key / summary_model / client_type /
+  llm_url / auth_header / max_tokens / send_max_tokens / llm_timeout / cache_minutes；
+- 两个 api_key 都为空则不工作；只配置其中一个时自动复用另一个。
+
 超时行为约定：
 - 指令查询（/wallet）：LLM 总结超时通过 QQ 信息返回错误，同时控制台打印日志。
 - 工具调用（get_api_balance）：LLM 总结超时仅在控制台打印错误日志，不主动发送消息。
@@ -39,7 +45,7 @@ from maibot_sdk import Command, Field, MaiBotPlugin, PluginConfigBase, Tool
 # 配置版本（config_version）：与 _manifest.json 的 version 保持同步。
 # config_version 用于检查配置文件（config.toml）是否需要更新：
 # 插件升级后若配置结构发生变化，可对比该值触发配置迁移/重建。
-SUPPORTED_CONFIG_VERSION = "1.0.0"
+SUPPORTED_CONFIG_VERSION = "1.0.1"
 
 # 默认余额查询接口（DeepSeek 开放平台）
 DEFAULT_BALANCE_URL = "https://api.deepseek.com/user/balance"
@@ -115,18 +121,39 @@ class PluginSectionConfig(PluginConfigBase):
     )
 
 
-class BalanceSectionConfig(PluginConfigBase):
-    __ui_label__ = "余额获取"
+class BalanceQueryConfig(PluginConfigBase):
+    """查询配置：要查余额的 API 平台及其凭据。"""
+
+    __ui_label__ = "查询配置"
     __ui_icon__ = "account_balance_wallet"
     __ui_order__ = 1
 
     api_key: str = Field(
         default="",
-        description="要获取余额的 API Key（默认为空；留空时 /wallet 与工具会提示未配置）",
+        description=(
+            "要获取余额的 API Key（查询平台的凭据，默认为空）。"
+            "与「总结配置」的 api_key 二选一即可：只配其中一个时自动复用另一个"
+        ),
     )
     api_url: str = Field(
         default=DEFAULT_BALANCE_URL,
         description="API Key 余额查询接口 URL（GET 请求），默认为 DeepSeek 开放平台",
+    )
+
+
+class SummaryConfig(PluginConfigBase):
+    """总结配置：把余额 JSON 交给 LLM 总结的模型平台及其凭据。"""
+
+    __ui_label__ = "总结配置"
+    __ui_icon__ = "smart_toy"
+    __ui_order__ = 2
+
+    api_key: str = Field(
+        default="",
+        description=(
+            "LLM 总结用的 API Key（模型平台的凭据，默认为空）。"
+            "与「查询配置」的 api_key 二选一即可：只配其中一个时自动复用另一个"
+        ),
     )
     summary_model: str = Field(
         default=DEFAULT_SUMMARY_MODEL,
@@ -159,8 +186,9 @@ class BalanceSectionConfig(PluginConfigBase):
     auth_header: str = Field(
         default=DEFAULT_AUTH_SPEC,
         description=(
-            "认证方式：'请求头名: 前缀' 格式（余额接口为 GET、模型接口为 POST，认证头共用）。"
-            "默认为 'Authorization: Bearer'（即 Authorization: Bearer <API_KEY>）。"
+            "认证方式：'请求头名: 前缀' 格式（模型接口为 POST，余额接口的认证方式"
+            "见「查询配置」）。默认为 'Authorization: Bearer'"
+            "（即 Authorization: Bearer <API_KEY>）。"
             "常见平台示例：Anthropic 'x-api-key:'、Google 'x-goog-api-key:'、"
             "Portkey 'x-portkey-api-key:'、部分平台 'api-key:'（前缀留空表示直接填 API Key）"
         ),
@@ -198,7 +226,7 @@ class BalanceSectionConfig(PluginConfigBase):
 class PromptSectionConfig(PluginConfigBase):
     __ui_label__ = "提示词"
     __ui_icon__ = "notes"
-    __ui_order__ = 2
+    __ui_order__ = 3
 
     lines: list[str] = Field(
         default_factory=lambda: list(DEFAULT_PROMPT_LINES),
@@ -211,7 +239,8 @@ class PromptSectionConfig(PluginConfigBase):
 
 class ApiBalanceConfig(PluginConfigBase):
     plugin: PluginSectionConfig = Field(default_factory=PluginSectionConfig)
-    balance: BalanceSectionConfig = Field(default_factory=BalanceSectionConfig)
+    balance: BalanceQueryConfig = Field(default_factory=BalanceQueryConfig)
+    summary: SummaryConfig = Field(default_factory=SummaryConfig)
     prompt: PromptSectionConfig = Field(default_factory=PromptSectionConfig)
 
 
@@ -281,15 +310,37 @@ class ApiBalancePlugin(MaiBotPlugin):
             return header.strip(), prefix.strip()
         return spec.strip(), ""
 
-    def _build_auth_headers(self, api_key: str) -> Dict[str, str]:
-        """根据 auth_header 配置构造认证请求头（余额接口与模型接口共用）。"""
-        header_name, prefix = self._parse_auth(self.config.balance.auth_header)
+    def _build_auth_headers(self, api_key: str, auth_spec: str) -> Dict[str, str]:
+        """根据 auth_header 配置构造认证请求头。
+
+        Args:
+            api_key: 该接口使用的 API Key。
+            auth_spec: 认证方式（'请求头名: 前缀'）。
+        """
+        header_name, prefix = self._parse_auth(auth_spec)
         key = str(api_key or "").strip()
         if prefix:
             header_value = f"{prefix} {key}"
         else:
             header_value = key
         return {header_name: header_value}
+
+    def _get_api_keys(self) -> Tuple[str, str]:
+        """返回 (查询用 key, 总结用 key)，支持单 key 复用。
+
+        规则：
+        - 两个都配置 → 各自使用；
+        - 只配置「查询配置」的 api_key → 总结接口复用该 key；
+        - 只配置「总结配置」的 api_key → 查询接口复用该 key；
+        - 两个都为空 → 返回 ("", "")，调用方提示未配置。
+        """
+        balance_key = str(self.config.balance.api_key or "").strip()
+        summary_key = str(self.config.summary.api_key or "").strip()
+        if not balance_key and summary_key:
+            balance_key = summary_key
+        elif not summary_key and balance_key:
+            summary_key = balance_key
+        return balance_key, summary_key
 
     # ==================== 余额获取 ====================
 
@@ -343,7 +394,7 @@ class ApiBalancePlugin(MaiBotPlugin):
         先做 URL 安全校验（仅 https、拒绝私网/元数据地址），防 SSRF 与 Key 泄露。
         """
         safe_url = self._validate_balance_url(api_url)
-        headers = self._build_auth_headers(api_key)
+        headers = self._build_auth_headers(api_key, self.config.balance.auth_header)
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
             resp = await client.get(safe_url, headers=headers)
             resp.raise_for_status()
@@ -381,7 +432,7 @@ class ApiBalancePlugin(MaiBotPlugin):
                 url = url.rstrip("/") + "/chat/completions"
         return url
 
-    def _build_llm_request(self, prompt: str) -> Tuple[str, Dict[str, str], Dict[str, Any]]:
+    def _build_llm_request(self, prompt: str, summary_api_key: str) -> Tuple[str, Dict[str, str], Dict[str, Any]]:
         """根据客户端类型构造模型接口请求，返回 (url, headers, payload)。
 
         llm_url 为接口基础地址（OpenAI 兼容系列自动补全 /chat/completions；
@@ -393,18 +444,21 @@ class ApiBalancePlugin(MaiBotPlugin):
           会返回 503 overloaded_error），默认不发送已规避此类问题。
         - Anthropic Messages API 的 max_tokens 为必填字段，开关关闭时仍发送
           （使用 DEFAULT_MAX_TOKENS 兜底）。
+
+        注意：本方法使用「总结配置」[summary] 下的模型/URL/认证/API Key；
+        余额查询使用「查询配置」[balance] 下的接口与认证（见 _fetch_balance）。
         """
-        model = str(self.config.balance.summary_model or "").strip()
+        summary = self.config.summary
+        model = str(summary.summary_model or "").strip()
         if not model:
-            raise LLMError("未配置总结模型：请在插件配置 [balance] summary_model 中填写")
-        max_tokens = int(self.config.balance.max_tokens or 0)
-        send_max_tokens = bool(getattr(self.config.balance, "send_max_tokens", True))
-        llm_url = str(self.config.balance.llm_url or "").strip()
+            raise LLMError("未配置总结模型：请在插件配置 [summary] summary_model 中填写")
+        max_tokens = int(summary.max_tokens or 0)
+        send_max_tokens = bool(getattr(summary, "send_max_tokens", True))
+        llm_url = str(summary.llm_url or "").strip()
         if not llm_url:
-            raise LLMError("未配置模型接口 URL：请在插件配置 [balance] llm_url 中填写")
-        client_type = str(self.config.balance.client_type or "").strip().lower()
-        api_key = str(self.config.balance.api_key or "").strip()
-        headers = self._build_auth_headers(api_key)
+            raise LLMError("未配置模型接口 URL：请在插件配置 [summary] llm_url 中填写")
+        client_type = str(summary.client_type or "").strip().lower()
+        headers = self._build_auth_headers(summary_api_key, summary.auth_header)
         url = self._build_llm_url(llm_url, model, client_type)
 
         if client_type == "anthropic":
@@ -510,9 +564,9 @@ class ApiBalancePlugin(MaiBotPlugin):
                     if stop_reason == "max_tokens":
                         return (
                             "模型思考占满了 max_tokens 上限，正式回答被截断："
-                            "请调大 balance.max_tokens，或将 send_max_tokens 设为 false"
+                            "请调大 summary.max_tokens，或将 send_max_tokens 设为 false"
                         )
-                    return "模型只返回了思考内容而未输出正式回答，请调大 balance.max_tokens 后重试"
+                    return "模型只返回了思考内容而未输出正式回答，请调大 summary.max_tokens 后重试"
                 return ""
 
             # OpenAI 兼容（含 gemini/cohere 的通用检查）
@@ -530,27 +584,28 @@ class ApiBalancePlugin(MaiBotPlugin):
                 if finish_reason == "length":
                     return (
                         "模型思考占满了 max_tokens 上限，正式回答被截断："
-                        "请调大 balance.max_tokens，或将 send_max_tokens 设为 false"
+                        "请调大 summary.max_tokens，或将 send_max_tokens 设为 false"
                     )
-                return "模型只返回了思考内容而未输出正式回答，请调大 balance.max_tokens 后重试"
+                return "模型只返回了思考内容而未输出正式回答，请调大 summary.max_tokens 后重试"
         except Exception:
             pass
         return ""
 
-    async def _summarize_balance(self, json_text: str) -> str:
+    async def _summarize_balance(self, json_text: str, summary_api_key: str) -> str:
         """调用配置的模型接口总结余额 JSON。
 
         成功返回总结文本；超时抛 LLMTimeoutError；其他失败抛 LLMError。
         模型接口 URL（llm_url，OpenAI 兼容系列自动补全 /chat/completions）、
         客户端格式（client_type，决定请求体格式与响应解析）、模型名
-        （summary_model）、认证方式（auth_header）均为独立配置，与余额查询
+        （summary_model）、认证方式（auth_header）、API Key（summary.api_key，
+        为空时复用 balance.api_key）均在「总结配置」[summary] 下，与余额查询
         接口（api_url）无关；client_type 与 auth_header 自由组合可跑通大部分平台。
         """
         prompt = self._build_prompt(json_text)
-        llm_timeout = float(self.config.balance.llm_timeout or 0)
+        llm_timeout = float(self.config.summary.llm_timeout or 0)
         timeout = httpx.Timeout(timeout=llm_timeout if llm_timeout > 0 else DEFAULT_LLM_TIMEOUT)
 
-        url, headers, payload = self._build_llm_request(prompt)
+        url, headers, payload = self._build_llm_request(prompt, summary_api_key)
 
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
@@ -584,7 +639,7 @@ class ApiBalancePlugin(MaiBotPlugin):
                 raise LLMTimeoutError(f"LLM 总结超时：{msg}")
             raise LLMError(f"LLM 调用失败：{msg}")
 
-        client_type = str(self.config.balance.client_type or "").strip().lower()
+        client_type = str(self.config.summary.client_type or "").strip().lower()
         response = self._parse_llm_response(data, client_type)
         if not response:
             # 诊断空响应原因（如思考模型思考占满 max_tokens 被截断）
@@ -630,20 +685,27 @@ class ApiBalancePlugin(MaiBotPlugin):
         ts = cache.get("timestamp")
         if not isinstance(ts, (int, float)) or not ts:
             return False
-        interval = float(self.config.balance.cache_minutes or DEFAULT_CACHE_MINUTES) * 60
+        interval = float(self.config.summary.cache_minutes or DEFAULT_CACHE_MINUTES) * 60
         return (time.time() - float(ts)) < interval
 
     # ==================== 获取 + 总结（公共链路） ====================
 
-    async def _fetch_and_summarize(self, api_key: str, api_url: str) -> Dict[str, Any]:
+    async def _fetch_and_summarize(self) -> Dict[str, Any]:
         """实时获取余额并 LLM 总结，返回 {'summary','raw_json'}。
 
-        与指令 /wallet 使用相同链路；调用后会把结果写入缓存。
-        失败时抛异常（由调用方决定提示方式）。
+        查询/总结各自的 API Key 从配置读取（两个 key 都为空时抛 LLMError；
+        只配一个时自动复用）。与指令 /wallet 使用相同链路；
+        调用后会把结果写入缓存。失败时抛异常（由调用方决定提示方式）。
         """
-        data = await self._fetch_balance(api_key, api_url)
+        balance_key, summary_key = self._get_api_keys()
+        if not balance_key:
+            raise LLMError("未配置 API Key：请在插件配置 [balance] api_key 或 [summary] api_key 中至少填写一个")
+        api_url = str(self.config.balance.api_url or "").strip()
+        if not api_url:
+            raise LLMError("未配置余额接口 URL：请在插件配置 [balance] api_url 中填写")
+        data = await self._fetch_balance(balance_key, api_url)
         json_text = json.dumps(data, ensure_ascii=False, indent=2)
-        summary = await self._summarize_balance(json_text)
+        summary = await self._summarize_balance(json_text, summary_key)
         self._write_cache(summary, json_text)
         return {"summary": summary, "raw_json": json_text}
 
@@ -670,13 +732,13 @@ class ApiBalancePlugin(MaiBotPlugin):
     )
     async def tool_get_api_balance(self, **kwargs: Any) -> Dict[str, Any]:
         del kwargs
-        key = str(self.config.balance.api_key or "").strip()
-        url = str(self.config.balance.api_url or "").strip()
-        if not key:
+        balance_key, _ = self._get_api_keys()
+        if not balance_key:
             return {
                 "success": False,
-                "error": "未配置 API Key：请在插件配置 [balance] api_key 中填写",
+                "error": "未配置 API Key：请在插件配置 [balance] api_key 或 [summary] api_key 中至少填写一个",
             }
+        url = str(self.config.balance.api_url or "").strip()
         if not url:
             return {
                 "success": False,
@@ -700,7 +762,7 @@ class ApiBalancePlugin(MaiBotPlugin):
         # 2. 缓存过期或不存在：调用与指令相同的链路实时获取，并更新缓存
         self.ctx.logger.info("工具调用 get_api_balance：缓存已过期，实时获取余额")
         try:
-            result = await self._fetch_and_summarize(key, url)
+            result = await self._fetch_and_summarize()
         except LLMTimeoutError as e:
             self.ctx.logger.error("工具调用 get_api_balance：%s", e)
             return {"success": False, "error": f"余额总结超时：{e}"}
@@ -728,13 +790,14 @@ class ApiBalancePlugin(MaiBotPlugin):
     )
     async def cmd_wallet(self, **kwargs: Any) -> tuple[bool, str, int]:
         stream_id = str(kwargs.get("stream_id") or "")
-        key = str(self.config.balance.api_key or "").strip()
-        url = str(self.config.balance.api_url or "").strip()
-        if not key:
+        balance_key, _ = self._get_api_keys()
+        if not balance_key:
             await self.ctx.send.text(
-                "未配置 API Key：请在插件配置 [balance] api_key 中填写后使用 /wallet", stream_id
+                "未配置 API Key：请在插件配置 [balance] api_key 或 [summary] api_key 中至少填写一个",
+                stream_id,
             )
             return False, "未配置 API Key", 1
+        url = str(self.config.balance.api_url or "").strip()
         if not url:
             await self.ctx.send.text(
                 "未配置余额接口 URL：请在插件配置 [balance] api_url 中填写", stream_id
@@ -743,7 +806,7 @@ class ApiBalancePlugin(MaiBotPlugin):
 
         # 实时获取余额 + LLM 总结（与工具同链路，且会覆盖/更新本地缓存）
         try:
-            result = await self._fetch_and_summarize(key, url)
+            result = await self._fetch_and_summarize()
         except LLMTimeoutError as e:
             self.ctx.logger.error("指令 /wallet：%s", e)
             await self.ctx.send.text(f"余额总结超时：{e}", stream_id)
