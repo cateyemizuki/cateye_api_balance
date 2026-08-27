@@ -1,5 +1,13 @@
 # 更新日志
 
+## 1.0.1（2026-08-xx）
+
+- **配置拆为两个 API Key**：`[balance]` 查询配置（要查余额平台的 `api_key`/`api_url`）+ `[summary]` 总结配置（LLM 总结用的 `api_key`/模型/接口/认证/超时/缓存）。
+- **Key 复用**：两个 api_key 都为空则不工作；只配置其中一个时自动复用另一个（查询与总结可各自独立认证）。
+- **认证方式拆分**：余额接口（GET）使用「查询配置」`balance.auth_header`，模型接口（POST）使用「总结配置」`summary.auth_header`，可分别配置。
+- 工具/指令提示语更新为「[balance] api_key 或 [summary] api_key 至少填写一个」。
+- 文档（README / COMMANDS / CHANGELOG）同步更新配置结构说明。
+
 ## 1.0.0（2026-08-xx）
 
 - 首个版本。
