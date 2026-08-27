@@ -18,8 +18,14 @@
 
 ## 缓存机制
 
-- **工具调用**：优先使用本地缓存（AI 总结 + 原始 JSON，持久化于 `data/plugins/<plugin_id>/wallet_cache.json`），默认每 2 小时（`balance.cache_minutes = 120`）才通过 API 获取一次新数据。只有工具被调用且发现缓存超期时才实时刷新；**插件不会主动更新**。返回结果不显示时间戳。
+- **工具调用**：优先使用本地缓存（AI 总结 + 原始 JSON，持久化于 `data/plugins/<plugin_id>/wallet_cache.json`），默认每 2 小时（`summary.cache_minutes = 120`）才通过 API 获取一次新数据。只有工具被调用且发现缓存超期时才实时刷新；**插件不会主动更新**。返回结果不显示时间戳。
 - **指令 `/wallet`**：始终**实时**获取并更新总结数据与时间戳（覆盖缓存，供工具读取）。
+
+## 配置结构（v1.0.1 起）
+
+- `[balance]` **查询配置**：`api_key`（要查余额平台的 Key）、`api_url`（余额查询接口 URL）。
+- `[summary]` **总结配置**：`api_key`（LLM 总结用的 Key）、`summary_model`、`client_type`、`llm_url`、`auth_header`、`max_tokens`、`send_max_tokens`、`llm_timeout`、`cache_minutes`。
+- **API Key 复用**：两个 key 都为空则不工作；只配置其中一个时自动复用另一个（例如只填 `[balance].api_key`，总结接口也会使用该 Key）。
 
 ## 超时行为约定
 
