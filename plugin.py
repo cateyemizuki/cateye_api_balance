@@ -45,7 +45,7 @@ from maibot_sdk import Command, Field, MaiBotPlugin, PluginConfigBase, Tool
 # 配置版本（config_version）：与 _manifest.json 的 version 保持同步。
 # config_version 用于检查配置文件（config.toml）是否需要更新：
 # 插件升级后若配置结构发生变化，可对比该值触发配置迁移/重建。
-SUPPORTED_CONFIG_VERSION = "1.0.1"
+SUPPORTED_CONFIG_VERSION = "1.0.2"
 
 # 默认余额查询接口（DeepSeek 开放平台）
 DEFAULT_BALANCE_URL = "https://api.deepseek.com/user/balance"
@@ -105,11 +105,20 @@ class LLMError(Exception):
 
 
 class PluginSectionConfig(PluginConfigBase):
+    """插件（plugin 配置节）：全局开关与配置版本。"""
+
     __ui_label__ = "插件"
     __ui_icon__ = "package"
     __ui_order__ = 0
 
-    enabled: bool = Field(default=True, description="是否启用插件")
+    enabled: bool = Field(
+        default=True,
+        description="是否启用插件",
+        json_schema_extra={
+            "label": "启用插件",
+            "hint": "插件总开关",
+        },
+    )
     config_version: str = Field(
         default=SUPPORTED_CONFIG_VERSION,
         description="配置版本（与插件版本同步，用于检查配置文件是否需要更新）",
@@ -117,12 +126,13 @@ class PluginSectionConfig(PluginConfigBase):
             "disabled": True,
             "hidden": True,
             "label": "配置版本",
+            "hint": "配置版本，勿改",
         },
     )
 
 
 class BalanceQueryConfig(PluginConfigBase):
-    """查询配置：要查余额的 API 平台及其凭据。"""
+    """查询配置（balance 配置节：要查询余额的 API 平台及其凭据。"""
 
     __ui_label__ = "查询配置"
     __ui_icon__ = "account_balance_wallet"
@@ -134,15 +144,23 @@ class BalanceQueryConfig(PluginConfigBase):
             "要获取余额的 API Key（查询平台的凭据，默认为空）。"
             "与「总结配置」的 api_key 二选一即可：只配其中一个时自动复用另一个"
         ),
+        json_schema_extra={
+            "label": "查询 API Key（余额平台凭据）",
+            "hint": "余额查询平台 API Key",
+        },
     )
     api_url: str = Field(
         default=DEFAULT_BALANCE_URL,
         description="API Key 余额查询接口 URL（GET 请求），默认为 DeepSeek 开放平台",
+        json_schema_extra={
+            "label": "余额查询接口 URL（GET）",
+            "hint": "余额查询接口地址",
+        },
     )
 
 
 class SummaryConfig(PluginConfigBase):
-    """总结配置：把余额 JSON 交给 LLM 总结的模型平台及其凭据。"""
+    """总结配置（summary 配置节：把余额 JSON 交给 LLM 总结的模型平台及其凭据。"""
 
     __ui_label__ = "总结配置"
     __ui_icon__ = "smart_toy"
@@ -154,6 +172,10 @@ class SummaryConfig(PluginConfigBase):
             "LLM 总结用的 API Key（模型平台的凭据，默认为空）。"
             "与「查询配置」的 api_key 二选一即可：只配其中一个时自动复用另一个"
         ),
+        json_schema_extra={
+            "label": "总结 API Key（模型平台凭据）",
+            "hint": "总结用模型 API Key",
+        },
     )
     summary_model: str = Field(
         default=DEFAULT_SUMMARY_MODEL,
@@ -161,6 +183,10 @@ class SummaryConfig(PluginConfigBase):
             "总结余额 JSON 的模型名（模型接口中的 model 字段）。"
             "默认使用余额获取平台所提供的模型（deepseek v4 flash）"
         ),
+        json_schema_extra={
+            "label": "总结模型名",
+            "hint": "总结用模型名",
+        },
     )
     client_type: str = Field(
         default=DEFAULT_CLIENT_TYPE,
@@ -170,6 +196,10 @@ class SummaryConfig(PluginConfigBase):
             "huggingface / baidu。与认证方式（auth_header）自由组合，"
             "可跑通大部分 API 平台；详见 README 平台对应表"
         ),
+        json_schema_extra={
+            "label": "客户端兼容格式",
+            "hint": "接口兼容格式",
+        },
     )
     llm_url: str = Field(
         default=DEFAULT_LLM_URL,
@@ -182,6 +212,10 @@ class SummaryConfig(PluginConfigBase):
             "（用于模型名需出现在 URL 中的平台，如 Gemini）；"
             "余额查询接口（api_url）与模型接口是不同 API，需单独设置"
         ),
+        json_schema_extra={
+            "label": "模型接口 URL",
+            "hint": "模型接口地址",
+        },
     )
     auth_header: str = Field(
         default=DEFAULT_AUTH_SPEC,
@@ -192,10 +226,18 @@ class SummaryConfig(PluginConfigBase):
             "常见平台示例：Anthropic 'x-api-key:'、Google 'x-goog-api-key:'、"
             "Portkey 'x-portkey-api-key:'、部分平台 'api-key:'（前缀留空表示直接填 API Key）"
         ),
+        json_schema_extra={
+            "label": "认证方式（模型接口）",
+            "hint": "模型接口认证方式",
+        },
     )
     max_tokens: int = Field(
         default=DEFAULT_MAX_TOKENS,
         description="LLM 总结时最大输出 token 数",
+        json_schema_extra={
+            "label": "最大输出 token 数",
+            "hint": "最大输出 token 数",
+        },
     )
     send_max_tokens: bool = Field(
         default=False,
@@ -204,6 +246,10 @@ class SummaryConfig(PluginConfigBase):
             "由平台自动决定输出长度）。部分上游模型不接受 max_tokens"
             "（如 Command Code 的 poolside/laguna-s-2.1-free），会导致 503 错误"
         ),
+        json_schema_extra={
+            "label": "请求体中发送 max_tokens",
+            "hint": "发送 max_tokens",
+        },
     )
     llm_timeout: float = Field(
         default=DEFAULT_LLM_TIMEOUT,
@@ -211,6 +257,10 @@ class SummaryConfig(PluginConfigBase):
             "LLM 总结超时时间（秒）。超时后：指令查询通过 QQ 信息返回错误（控制台也打印日志），"
             "工具调用仅在控制台打印错误日志"
         ),
+        json_schema_extra={
+            "label": "LLM 总结超时（秒）",
+            "hint": "总结超时（秒）",
+        },
     )
     cache_minutes: int = Field(
         default=DEFAULT_CACHE_MINUTES,
@@ -220,10 +270,16 @@ class SummaryConfig(PluginConfigBase):
             "超过则重新调用 API 获取并更新缓存。"
             "指令 /wallet 始终实时获取并覆盖缓存"
         ),
+        json_schema_extra={
+            "label": "工具缓存间隔（分钟）",
+            "hint": "工具缓存间隔（分钟）",
+        },
     )
 
 
 class PromptSectionConfig(PluginConfigBase):
+    """提示词（prompt 配置节：LLM 总结余额 JSON 时使用的提示词模板。"""
+
     __ui_label__ = "提示词"
     __ui_icon__ = "notes"
     __ui_order__ = 3
@@ -234,6 +290,10 @@ class PromptSectionConfig(PluginConfigBase):
             "总结提示词（每一项为一行，可添加多项，代码读取时自动分行拼接）。"
             "尾部的 'JSON数据：' 与余额 JSON 由代码自动补充，无需在此填写"
         ),
+        json_schema_extra={
+            "label": "总结提示词行",
+            "hint": "总结提示词，每行一项",
+        },
     )
 
 
