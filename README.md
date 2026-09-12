@@ -37,11 +37,12 @@
 ```toml
 [plugin]
 enabled = true
-config_version = "1.0.1"
+config_version = "1.0.3"
 
 [balance]          # 查询配置：要查余额的平台
 api_key = ""                                       # 要获取余额的 API Key（默认为空）
 api_url = "https://api.deepseek.com/user/balance"   # 余额查询接口 URL（GET 请求）
+auth_header = "Authorization: Bearer"              # 余额接口认证方式："请求头名: 前缀"
 
 [summary]          # 总结配置：LLM 总结用的平台
 api_key = ""                                       # LLM 总结用的 API Key（默认为空；只配 [balance] 时自动复用）
@@ -65,6 +66,7 @@ lines = [
 
 - `balance.api_key`：**要获取余额的 API Key**（查询平台的凭据，默认为空）。与 `summary.api_key` 二选一即可：**只配其中一个时自动复用另一个**；两个都为空时 `/wallet` 与工具会提示未配置。
 - `balance.api_url`：API Key 提供方提供的**余额获取 URL**（GET 请求），默认为 DeepSeek 开放平台。**安全约束：仅支持 https，且拒绝私网/环回/链路本地/云元数据地址（如 127.0.0.1、10.x、169.254.169.254），防止 SSRF 与 API Key 泄露**；工具 `get_api_balance` 只从配置读取该值，不接受 LLM 传入。`/wallet` 指令同样走该配置。
+- `balance.auth_header`：**余额接口（GET）的认证方式**，格式为 `请求头名: 前缀`，默认 `Authorization: Bearer`（即发送 `Authorization: Bearer <balance.api_key>`）。若平台要求请求头直接填 API Key（无前缀），写成 `自定义请求头名:` 即可（前缀留空）。与 `summary.auth_header` **相互独立**，可分别配置。
 - `summary.api_key`：**LLM 总结用的 API Key**（模型平台的凭据，默认为空）。与 `balance.api_key` 二选一即可：**只配其中一个时自动复用另一个**；两个都为空时不工作。查询与总结的认证方式（`auth_header`）也可分别配置。
 - `summary.summary_model`：总结余额 JSON 的**模型名**（即模型接口请求体中的 `model` 字段）。默认使用余额获取平台所提供的模型（`deepseek v4 flash`）。
 - `summary.client_type`：**客户端兼容格式**（决定模型接口的**请求体格式与响应解析**，不参与 URL 拼接）：`openai` / `anthropic` / `gemini` / `cohere` / `deepseek` / `xai` / `mistral` / `huggingface` / `baidu`。与 `auth_header` **自由组合**，可跑通大部分 API 平台（详见下方平台对应表）。
@@ -111,6 +113,22 @@ lines = [
 > - **部分模型不接受 `max_tokens` 参数**：实测 Command Code 的 `poolside/laguna-s-2.1-free` 带上 `max_tokens` 会返回 `503 overloaded_error`。插件默认 `send_max_tokens = false`（不发送），已规避此类问题；如需发送可自行开启。
 > - **思考模型（reasoning model）需要更大的 `max_tokens`**：如 `tencent/hy3-paid` 会先输出思考内容再输出正式回答，思考过程会占用大量 token 预算。若 `max_tokens` 太小，思考占满上限后正式回答会被截断（`content` 为空、`finish_reason=length`）。插件默认不发送 `max_tokens`（`send_max_tokens = false`），由平台自动决定输出长度；如需手动限制，请调大 `summary.max_tokens`。插件会在遇到此类情况时给出针对性错误提示。
 
+### 升级说明（从旧版本升级时必读）
+
+**v1.0.1 起配置节由 1 个拆成 2 个。** v1.0.0 的所有字段（含 `auth_header`、`llm_url`、`client_type`、`summary_model`、`max_tokens` 等）原本都写在 `[balance]` 一个节里，v1.0.1 起改为：
+
+- `[balance]`（查询配置）只保留余额查询相关：`api_key` / `api_url` / `auth_header`；
+- 其余 LLM 总结相关字段全部迁到 `[summary]`（总结配置）。
+
+升级时 Host 会以**最新默认结构为骨架**重建 `config.toml`，并且只把「新旧结构中同名」的字段值搬过去，**不在新结构里的旧字段会被丢弃**。因此从 v1.0.0 升级后：
+
+- `[balance]` 的 `api_key` / `api_url` / `auth_header` 会保留（v1.0.3 起 `auth_header` 已在结构骨架中，故能保留）；
+- 原先写在 `[balance]` 下的 `summary_model` / `llm_url` / `client_type` / `max_tokens` / `send_max_tokens` / `llm_timeout` / `cache_minutes` **会丢失**，`[summary]` 退回默认值（指向 DeepSeek 开放平台）。
+
+👉 **升级后请在 WebUI 或 `config.toml` 中检查 `[summary]` 节，把模型接口相关配置（模型名、`llm_url`、`client_type`、认证方式等）重新填写正确**，否则 `/wallet` 与工具调用会拿你的 Key 去请求默认的 DeepSeek 地址，导致 LLM 总结失败。原配置在重建前会被备份到插件目录的 `config_back/`。
+
+> **v1.0.3 修复说明**：v1.0.1 拆分配置节时，`auth_header` 只声明在了 `[summary]`，但余额查询代码（`_fetch_balance`）仍读取 `[balance].auth_header`，导致 `/wallet` 与工具调用必现 `'BalanceQueryConfig' object has no attribute 'auth_header'`。v1.0.3 已将 `balance.auth_header` 补回 `[balance]` 配置节，与「余额接口用 `balance.auth_header`、模型接口用 `summary.auth_header`，两者独立可配」的设计保持一致。详见 `CHANGELOG.md`。
+
 ## 使用说明
 
 ### 指令
@@ -142,7 +160,10 @@ cateye_api_balance/
 ├── README.md           # 本说明文档
 ├── COMMANDS.md         # 指令与触发词说明
 ├── CHANGELOG.md        # 更新日志
-└── LICENSE             # MIT 许可证
+├── LICENSE             # MIT 许可证
+├── logo.png            # 插件图标
+├── config.toml         # 运行时配置（Runner 生成/维护，含 API Key，勿提交）
+└── config_back/        # 配置版本升级时的自动备份（运行时生成）
 ```
 
 ## 免责声明

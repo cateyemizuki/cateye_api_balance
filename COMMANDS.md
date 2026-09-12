@@ -23,9 +23,14 @@
 
 ## 配置结构（v1.0.1 起）
 
-- `[balance]` **查询配置**：`api_key`（要查余额平台的 Key）、`api_url`（余额查询接口 URL）。
-- `[summary]` **总结配置**：`api_key`（LLM 总结用的 Key）、`summary_model`、`client_type`、`llm_url`、`auth_header`、`max_tokens`、`send_max_tokens`、`llm_timeout`、`cache_minutes`。
+- `[balance]` **查询配置**：`api_key`（要查余额平台的 Key）、`api_url`（余额查询接口 URL）、`auth_header`（余额接口认证方式，默认 `Authorization: Bearer`）。
+- `[summary]` **总结配置**：`api_key`（LLM 总结用的 Key）、`summary_model`、`client_type`、`llm_url`、`auth_header`（模型接口认证方式）、`max_tokens`、`send_max_tokens`、`llm_timeout`、`cache_minutes`。
+- **认证方式独立**：余额接口（GET）用 `balance.auth_header`，模型接口（POST）用 `summary.auth_header`，可分别配置。
 - **API Key 复用**：两个 key 都为空则不工作；只配置其中一个时自动复用另一个（例如只填 `[balance].api_key`，总结接口也会使用该 Key）。
+
+> **升级提示**：从 v1.0.0 升级时，Host 会按新结构重建 `config.toml`，原先写在 `[balance]` 下的 LLM 相关字段（`summary_model` / `llm_url` / `client_type` 等）**会丢失并退回默认值**，请升级后重新填写 `[summary]` 节。详见 README「升级说明」。
+>
+> **v1.0.3 修复**：v1.0.1 拆分后 `[balance]` 漏声明 `auth_header`，导致 `/wallet` 必现 `'BalanceQueryConfig' object has no attribute 'auth_header'`；v1.0.3 已补回。
 
 ## 超时行为约定
 

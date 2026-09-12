@@ -16,7 +16,7 @@
   （默认每 2 小时才通过 API 获取一次新数据，超期才实时刷新），返回不显示时间戳。
 
 配置结构（v1.0.1 起）：
-- [balance] 查询配置：查余额平台的 api_key / api_url；
+- [balance] 查询配置：查余额平台的 api_key / api_url / auth_header；
 - [summary] 总结配置：LLM 总结平台的 api_key / summary_model / client_type /
   llm_url / auth_header / max_tokens / send_max_tokens / llm_timeout / cache_minutes；
 - 两个 api_key 都为空则不工作；只配置其中一个时自动复用另一个。
@@ -45,7 +45,7 @@ from maibot_sdk import Command, Field, MaiBotPlugin, PluginConfigBase, Tool
 # 配置版本（config_version）：与 _manifest.json 的 version 保持同步。
 # config_version 用于检查配置文件（config.toml）是否需要更新：
 # 插件升级后若配置结构发生变化，可对比该值触发配置迁移/重建。
-SUPPORTED_CONFIG_VERSION = "1.0.2"
+SUPPORTED_CONFIG_VERSION = "1.0.3"
 
 # 默认余额查询接口（DeepSeek 开放平台）
 DEFAULT_BALANCE_URL = "https://api.deepseek.com/user/balance"
@@ -155,6 +155,20 @@ class BalanceQueryConfig(PluginConfigBase):
         json_schema_extra={
             "label": "余额查询接口 URL（GET）",
             "hint": "余额查询接口地址",
+        },
+    )
+    auth_header: str = Field(
+        default=DEFAULT_AUTH_SPEC,
+        description=(
+            "认证方式：'请求头名: 前缀' 格式（余额接口为 GET）。"
+            "默认为 'Authorization: Bearer'"
+            "（即 Authorization: Bearer <API_KEY>）。"
+            "常见平台示例：Anthropic 'x-api-key:'、Google 'x-goog-api-key:'、"
+            "Portkey 'x-portkey-api-key:'、部分平台 'api-key:'（前缀留空表示直接填 API Key）"
+        ),
+        json_schema_extra={
+            "label": "认证方式（余额接口）",
+            "hint": "余额接口认证方式",
         },
     )
 

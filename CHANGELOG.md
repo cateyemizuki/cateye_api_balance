@@ -1,5 +1,16 @@
 # 更新日志
 
+## 1.0.3（2026-09-12）
+
+- **修复 `/wallet` 与工具调用报错 `'BalanceQueryConfig' object has no attribute 'auth_header'`**：
+  1.0.1 拆分「查询配置 / 总结配置」时，`auth_header` 只被声明在 `[summary]`，
+  但 `_fetch_balance()` 仍读取 `self.config.balance.auth_header`，导致余额查询必现 AttributeError。
+  现已把 `auth_header` 补回 `[balance]`（默认 `Authorization: Bearer`），与 README / 1.0.1 变更说明的
+  「余额接口用 `balance.auth_header`、模型接口用 `summary.auth_header`，可分别配置」保持一致。
+- 同步修正模块 docstring 与 README 配置示例中遗漏的 `balance.auth_header`。
+- 兼容性：配置版本升级到 `1.0.3` 后，Host 会以最新默认结构重建 `config.toml`；
+  由于 `balance.auth_header` 重新出现在结构骨架中，旧配置里的该字段值会被保留。
+
 ## 1.0.2（2026-08-xx）
 
 - 为全部配置项补充/完善了用户友好的中文注释与说明（悬停提示），完善配置节说明；插件功能与行为不变。
