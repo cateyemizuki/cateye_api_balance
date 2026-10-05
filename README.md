@@ -3,7 +3,7 @@
 为麦麦（MaiBot）框架的插件，用于获取指定 API Key 的账户余额：
 
 - 通过配置的余额查询接口（**GET 请求**）获取余额 JSON；
-- 使用配置的 **LLM 模型**（默认 `deepseek v4 flash`）将余额 JSON 总结为**清晰的中文报告**（账户是否可用、各币种总额/赠金/充值余额等）；
+- 使用配置的 **LLM 模型**（默认 `deepseek-chat`，为 DeepSeek 开放平台真实模型 ID；其他平台请按该平台填写真实模型名）将余额 JSON 总结为**清晰的中文报告**（账户是否可用、各币种总额/赠金/充值余额等）；
 - 提供指令 `/wallet`（**单条信息合并转发**返回）与 LLM 工具 `get_api_balance`。
 
 默认适配 **DeepSeek 开放平台**余额接口（`https://api.deepseek.com/user/balance`）与模型接口（`https://api.deepseek.com/chat/completions`），认证方式默认为 `Authorization: Bearer <API_KEY>`；`client_type` 支持 openai/anthropic/gemini/cohere/deepseek/xai/mistral/huggingface/baidu 等多种客户端兼容格式，与认证方式自由组合，可通过配置切换适配其他常见平台。
@@ -13,7 +13,7 @@
 ## 功能特性
 
 - **余额获取**：以 GET 请求调用配置的余额接口，携带查询配置（`[balance]`）的认证请求头。
-- **LLM 总结**：通过**独立的模型接口 URL**（`[summary].llm_url`，OpenAI 兼容系列自动补全 `/chat/completions`，POST 请求，与余额接口为不同 API）把接口返回的余额 JSON 交给 LLM 总结为中文报告（默认 deepseek v4 flash，可配置模型、最大输出 token、超时时间）。**总结使用「总结配置」`[summary]` 下的 API Key**（`[summary].api_key`；为空时自动复用 `[balance].api_key`）。支持**客户端兼容格式切换**（`[summary].client_type`：openai/anthropic/gemini/cohere/deepseek/xai/mistral/huggingface/baidu），与认证方式自由组合可跑通大部分平台；默认不发送 `max_tokens`（`send_max_tokens = false`，由平台自动决定输出长度，规避部分上游不接受该参数的问题）。
+- **LLM 总结**：通过**独立的模型接口 URL**（`[summary].llm_url`，OpenAI 兼容系列自动补全 `/chat/completions`，POST 请求，与余额接口为不同 API）把接口返回的余额 JSON 交给 LLM 总结为中文报告（默认 `deepseek-chat`，可配置模型、最大输出 token、超时时间）。**总结使用「总结配置」`[summary]` 下的 API Key**（`[summary].api_key`；为空时自动复用 `[balance].api_key`）。支持**客户端兼容格式切换**（`[summary].client_type`：openai/anthropic/gemini/cohere/deepseek/xai/mistral/huggingface/baidu），与认证方式自由组合可跑通大部分平台；默认不发送 `max_tokens`（`send_max_tokens = false`，由平台自动决定输出长度，规避部分上游不接受该参数的问题）。
 - **可配置提示词**：提示词每项为一行（可添加多项），代码读取时自动分行拼接，并在尾部自动补充 `JSON数据：` 与余额 JSON，无需手工粘贴数据。
 - **指令 `/wallet`**：**实时**获取余额并返回信息式结果（**单条信息合并转发**发出，插件已声明 `send.forward` 能力），同时会**覆盖/更新本地缓存**（供工具调用使用）。
 - **LLM 工具 `get_api_balance`**：查看你的余额/存款（**纯娱乐玩梗用，非真实货币，不涉及隐私**）。用户向 bot 提及钱、余额、存款、零花钱、饭钱、钱包、请客等话题时，模型**应毫不犹豫地**调用该工具查余额并用俏皮夸张的语气回应（把余额说成"龙门币""小金库""饭钱"），让对话更有趣味性。**工具无参数**（API Key 与余额接口 URL 仅从插件配置读取，不接受 LLM 传入，防止 SSRF 与 Key 泄露）；**工具调用优先使用本地缓存**（默认每 2 小时才通过 API 获取一次新数据，超期才实时刷新），返回结果不显示时间戳。
@@ -28,7 +28,7 @@
 2. 重启 MaiBot，或在 WebUI 插件中心安装。
 3. 插件依赖 `httpx`，已声明于 `_manifest.json`，Host 会自动安装。
 
-> 兼容性声明：`host_application` `1.0.0 ~ 1.99.99`，`sdk` `2.0.0 ~ 2.99.99`（Manifest v2）。
+> 兼容性声明：`host_application` `1.0.0 ~ 1.99.99`，`sdk` `2.0.0 ~ 2.99.99`（Manifest v2）；同时兼容 MaiBot 1.2.x 与 1.3.0（v1.0.4 起按 1.3.0 规范补全配置 WebUI 元数据）。
 
 ## 配置说明
 
@@ -37,7 +37,7 @@
 ```toml
 [plugin]
 enabled = true
-config_version = "1.0.3"
+config_version = "1.0.5"
 
 [balance]          # 查询配置：要查余额的平台
 api_key = ""                                       # 要获取余额的 API Key（默认为空）
@@ -46,9 +46,10 @@ auth_header = "Authorization: Bearer"              # 余额接口认证方式：
 
 [summary]          # 总结配置：LLM 总结用的平台
 api_key = ""                                       # LLM 总结用的 API Key（默认为空；只配 [balance] 时自动复用）
-summary_model = "deepseek v4 flash"                # 总结余额 JSON 的模型名（模型接口中的 model 字段）
+summary_model = "deepseek-chat"                    # 总结余额 JSON 的模型名（DeepSeek 开放平台真实模型 ID；其他平台请填真实模型名）
 client_type = "deepseek"                           # 客户端兼容格式（openai/anthropic/gemini/cohere/deepseek/xai/mistral/huggingface/baidu）
 llm_url = "https://api.deepseek.com/chat/completions"  # 模型接口 URL（OpenAI 兼容系列自动补全 /chat/completions）
+llm_allowed_hosts = []                             # 模型接口主机白名单（可选，留空不启用；启用后仅允许列表内主机）
 auth_header = "Authorization: Bearer"              # 认证方式："请求头名: 前缀"
 max_tokens = 4096                                  # 总结时最大输出 token 数
 send_max_tokens = false                            # 是否在请求体中发送 max_tokens（默认 false 不发送，由平台自动决定）
@@ -65,12 +66,13 @@ lines = [
 ```
 
 - `balance.api_key`：**要获取余额的 API Key**（查询平台的凭据，默认为空）。与 `summary.api_key` 二选一即可：**只配其中一个时自动复用另一个**；两个都为空时 `/wallet` 与工具会提示未配置。
-- `balance.api_url`：API Key 提供方提供的**余额获取 URL**（GET 请求），默认为 DeepSeek 开放平台。**安全约束：仅支持 https，且拒绝私网/环回/链路本地/云元数据地址（如 127.0.0.1、10.x、169.254.169.254），防止 SSRF 与 API Key 泄露**；工具 `get_api_balance` 只从配置读取该值，不接受 LLM 传入。`/wallet` 指令同样走该配置。
+- `balance.api_url`：API Key 提供方提供的**余额获取 URL**（GET 请求），默认为 DeepSeek 开放平台。**安全约束：仅支持 https，且拒绝私网/环回/链路本地/云元数据地址（如 127.0.0.1、10.x、169.254.169.254），防止 SSRF 与 API Key 泄露**；工具 `get_api_balance` 只从配置读取该值，不接受 LLM 传入。`/wallet` 指令同样走该配置（详见下方「安全说明」）。
 - `balance.auth_header`：**余额接口（GET）的认证方式**，格式为 `请求头名: 前缀`，默认 `Authorization: Bearer`（即发送 `Authorization: Bearer <balance.api_key>`）。若平台要求请求头直接填 API Key（无前缀），写成 `自定义请求头名:` 即可（前缀留空）。与 `summary.auth_header` **相互独立**，可分别配置。
 - `summary.api_key`：**LLM 总结用的 API Key**（模型平台的凭据，默认为空）。与 `balance.api_key` 二选一即可：**只配其中一个时自动复用另一个**；两个都为空时不工作。查询与总结的认证方式（`auth_header`）也可分别配置。
-- `summary.summary_model`：总结余额 JSON 的**模型名**（即模型接口请求体中的 `model` 字段）。默认使用余额获取平台所提供的模型（`deepseek v4 flash`）。
+- `summary.summary_model`：总结余额 JSON 的**模型名**（即模型接口请求体中的 `model` 字段）。默认 `deepseek-chat` 为 **DeepSeek 开放平台真实模型 ID**；**其他平台请务必填写该平台真实存在的模型名**（旧版本默认值 `deepseek v4 flash` 仅为占位示例，并非真实模型 ID，v1.0.5 起已更正）。
 - `summary.client_type`：**客户端兼容格式**（决定模型接口的**请求体格式与响应解析**，不参与 URL 拼接）：`openai` / `anthropic` / `gemini` / `cohere` / `deepseek` / `xai` / `mistral` / `huggingface` / `baidu`。与 `auth_header` **自由组合**，可跑通大部分 API 平台（详见下方平台对应表）。
-- `summary.llm_url`：**模型接口 URL**。支持 `{model}` 占位符替换（用于模型名需出现在 URL 中的平台，如 Gemini：`https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent`）。**OpenAI 兼容系列（openai/deepseek/xai/mistral/huggingface/baidu）会自动补全 `/chat/completions`**：可填基础地址（如 `https://api.commandcode.ai/provider/v1`，自动补全为 `/provider/v1/chat/completions`）或完整端点（如 `https://api.deepseek.com/chat/completions`，直接使用）；非 OpenAI 兼容系列（anthropic/gemini/cohere）原样使用。注意：**余额查询接口（`balance.api_url`）与模型接口是不同的 API**，需单独设置；默认指向 DeepSeek 开放平台模型接口。
+- `summary.llm_url`：**模型接口 URL**。支持 `{model}` 占位符替换（用于模型名需出现在 URL 中的平台，如 Gemini：`https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent`）。**OpenAI 兼容系列（openai/deepseek/xai/mistral/huggingface/baidu）会自动补全 `/chat/completions`**：可填基础地址（如 `https://api.commandcode.ai/provider/v1`，自动补全为 `/provider/v1/chat/completions`）或完整端点（如 `https://api.deepseek.com/chat/completions`，直接使用）；非 OpenAI 兼容系列（anthropic/gemini/cohere）原样使用。注意：**余额查询接口（`balance.api_url`）与模型接口是不同的 API**，需单独设置；默认指向 DeepSeek 开放平台模型接口。**安全约束（v1.0.5 起，与余额接口同一套防护）：该 URL 携带 `summary.api_key` 出站，因此同样强制 https、拒绝 URL 内嵌凭据、拦截私网/环回/链路本地/云元数据地址（防 SSRF）；可选配置 `llm_allowed_hosts` 主机白名单进一步收紧出站目标**，详见下方「安全说明」。
+- `summary.llm_allowed_hosts`：**模型接口主机白名单**（可选，每项一个主机名，留空不启用）。启用后 `llm_url` 的主机名必须在该列表内（不区分大小写，如 `api.deepseek.com`）；无论是否启用，https 强制与私网拦截始终生效。
 - `summary.auth_header`：**模型接口（POST）的认证方式**，格式为 `请求头名: 前缀`，默认 `Authorization: Bearer`（即发送 `Authorization: Bearer <summary.api_key>`）。若平台要求请求头直接填 API Key（无前缀），写成 `自定义请求头名:` 即可（前缀留空）。余额接口（GET）的认证方式见「查询配置」`balance.auth_header`（v1.0.1 起两者独立配置，均可自定义）。
 - `summary.max_tokens`：控制 LLM 总结时输出的最大 token 数（默认 4096；仅在 `send_max_tokens` 为 `true` 时发送）。
 - `summary.send_max_tokens`：是否在模型请求体中发送 `max_tokens` 参数（默认 `false`，不发送，由平台自动决定输出长度）。**部分上游模型不接受 `max_tokens`**（实测 Command Code 的 `poolside/laguna-s-2.1-free` 带上 `max_tokens` 会返回 `503 overloaded_error`）；而**思考模型**（如 `tencent/hy3-paid`）在 `max_tokens` 过小时思考占满上限会被截断。默认关闭可规避这两类问题（Anthropic Messages API 的 `max_tokens` 为必填字段，开关关闭时仍会发送，使用 `max_tokens` 配置值兜底）。
@@ -145,6 +147,13 @@ lines = [
 
 > 触发场景：`get_api_balance` 返回的是 API 账户余额，性质相当于游戏里的龙门币/金币或角色扮演的零花钱，**纯娱乐玩梗用、非真实货币、不涉及隐私**。用户向 bot 提及钱包余额之类的话题时，bot 应毫不犹豫地调用该工具查余额，并用俏皮夸张的语气回应（把余额说成"龙门币""小金库"等），添加聊天趣味性。工具无参数（API Key 与余额接口 URL 仅从配置读取），优先使用本地缓存（默认每 2 小时才通过 API 获取一次新数据），返回不显示时间戳；`/wallet` 指令则始终实时获取。
 
+## 安全说明
+
+- **出站 URL 护栏（防 SSRF / Key 泄露）**：余额接口（`balance.api_url`）与模型接口（`summary.llm_url`）都是携带 API Key 的出站请求，两者走同一套 `url_guard` 护栏（随插件分发的统一参考实现，来源 cateye_common）：仅允许 https、拒绝 URL 内嵌用户名/密码、解析出的全部 IP 逐一判黑（私网/环回/链路本地含 169.254.169.254 云元数据/CGNAT/组播/保留地址，IPv4 + IPv6 含 v4-mapped）；`llm_allowed_hosts` 白名单启用后还会限制模型接口的主机名。DNS 解析在线程池内执行，不阻塞事件循环。
+- **TOCTOU / DNS rebinding 已知边界**：护栏在请求前解析并校验主机名对应的全部 IP，但 httpx 实际发起连接时会再次解析 DNS，两次解析之间若 DNS 记录变更，存在极小的绕过窗口。由于 httpx 无法在请求时钉住校验过的 IP（需自定义 transport 层），当前以「全量解析 + 逐 IP 判黑」尽力收敛；`api_url`/`llm_url` 均为配置侧输入（聊天与 LLM 不可控）、且 3xx 重定向不被跟随，实际可利用性很低。如需彻底消除，请启用 `llm_allowed_hosts` 白名单。
+- **错误回显脱敏**：`/wallet` 指令与工具调用失败时，聊天/LLM 侧只收到简短通用话术（不含 URL、IP、状态码、上游错误详情与内网拓扑）；完整异常仅写入控制台日志。
+- **缓存文件权限**：`wallet_cache.json`（余额 summary + 原始 JSON，不含 API Key）以 0o600 权限、临时文件 + 原子替换方式写入（Windows 上权限收紧尽力而为），降低同机其他用户读取与读到半截 JSON 的风险。
+
 ## 数据存储
 
 - 本插件不保存任何用户数据；API Key 仅存在于插件配置（`config.toml`）中（查询 Key 在 `[balance].api_key`，总结 Key 在 `[summary].api_key`）。
@@ -157,6 +166,7 @@ lines = [
 cateye_api_balance/
 ├── _manifest.json      # 插件元信息（Manifest v2）
 ├── plugin.py           # 插件主体（配置 / 余额获取 / LLM 总结 / 指令 / LLM 工具）
+├── url_guard.py        # 出站 URL 安全护栏（随插件分发的统一参考实现，来源 cateye_common）
 ├── README.md           # 本说明文档
 ├── COMMANDS.md         # 指令与触发词说明
 ├── CHANGELOG.md        # 更新日志

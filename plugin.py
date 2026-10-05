@@ -3,7 +3,7 @@
 功能：
 - 通过配置的余额接口（GET 请求）获取指定 API Key 的账户余额 JSON。
 - 通过配置的模型接口（llm_url；OpenAI 兼容系列自动补全 /chat/completions，
-  其余原样使用）使用 LLM（默认 deepseek v4 flash）将返回的 JSON 总结为
+  其余原样使用）使用 LLM（默认 deepseek-chat）将返回的 JSON 总结为
   清晰的中文报告。
 - 客户端兼容格式切换：client_type 决定请求体格式与响应解析（openai /
   anthropic / gemini / cohere / deepseek / xai / mistral / huggingface /
@@ -28,24 +28,51 @@
 
 from __future__ import annotations
 
-import ipaddress
 import json
 import os
-import socket
 import time
-from typing import Any, Dict, List, Tuple
-from urllib.parse import quote, urlparse
+from pathlib import Path
+from typing import Any, ClassVar, Dict, List, Tuple
+from urllib.parse import quote
 
 import httpx
 
 from maibot_sdk import Command, Field, MaiBotPlugin, PluginConfigBase, Tool
+
+try:
+    # 插件作为包被导入时走相对导入（plugins/cateye_api_balance/ 有 __init__.py）
+    from .url_guard import UrlGuardError, check_url, sanitize_error
+except ImportError:  # pragma: no cover - Runner 以独立模块加载 plugin.py 时走绝对导入
+    # 兜底：把插件目录加入 sys.path，确保能导入同目录的 url_guard
+    import sys as _sys
+
+    _PLUGIN_DIR = Path(__file__).resolve().parent
+    if str(_PLUGIN_DIR) not in _sys.path:
+        _sys.path.insert(0, str(_PLUGIN_DIR))
+    from url_guard import (  # type: ignore[no-redef]
+        UrlGuardError,
+        check_url,
+        sanitize_error,
+    )
 
 # ==================== 常量 ====================
 
 # 配置版本（config_version）：与 _manifest.json 的 version 保持同步。
 # config_version 用于检查配置文件（config.toml）是否需要更新：
 # 插件升级后若配置结构发生变化，可对比该值触发配置迁移/重建。
-SUPPORTED_CONFIG_VERSION = "1.0.3"
+SUPPORTED_CONFIG_VERSION = "1.0.5"
+
+
+def _ui_i18n(en_label: str, en_hint: str = "") -> Dict[str, Dict[str, Dict[str, str]]]:
+    """字段级英文翻译（并入 json_schema_extra；WebUI 按 i18n[locale]['label'/'hint'] 取用）。
+
+    zh-CN 文案即字段本身的 label/hint（中文），无需重复；此处仅补充 en，
+    满足 1.3.0 WebUI 元数据要求（每个字段至少提供 en 的 label/hint）。
+    """
+    entry: Dict[str, str] = {"label": en_label}
+    if en_hint:
+        entry["hint"] = en_hint
+    return {"i18n": {"en": entry}}
 
 # 默认余额查询接口（DeepSeek 开放平台）
 DEFAULT_BALANCE_URL = "https://api.deepseek.com/user/balance"
@@ -58,8 +85,9 @@ DEFAULT_LLM_URL = "https://api.deepseek.com/chat/completions"
 # 默认客户端类型（决定请求体格式与响应解析，不参与 URL 拼接）
 DEFAULT_CLIENT_TYPE = "deepseek"
 
-# 默认总结模型（DeepSeek 开放平台所提供的模型）
-DEFAULT_SUMMARY_MODEL = "deepseek v4 flash"
+# 默认总结模型（DeepSeek 开放平台真实模型 ID；
+# 使用其他平台时请在配置中填写该平台真实存在的模型名）
+DEFAULT_SUMMARY_MODEL = "deepseek-chat"
 
 # 默认认证方式："请求头名: 前缀"，余额接口为 GET、模型接口为 POST
 DEFAULT_AUTH_SPEC = "Authorization: Bearer"
@@ -108,6 +136,9 @@ class PluginSectionConfig(PluginConfigBase):
     """插件（plugin 配置节）：全局开关与配置版本。"""
 
     __ui_label__ = "插件"
+    __ui_i18n__: ClassVar[Dict[str, Dict[str, str]]] = {
+        "en": {"title": "Plugin", "description": "Global switch and config version."}
+    }
     __ui_icon__ = "package"
     __ui_order__ = 0
 
@@ -117,6 +148,7 @@ class PluginSectionConfig(PluginConfigBase):
         json_schema_extra={
             "label": "启用插件",
             "hint": "插件总开关",
+            **_ui_i18n("Enable plugin", "Master switch for the plugin."),
         },
     )
     config_version: str = Field(
@@ -127,6 +159,7 @@ class PluginSectionConfig(PluginConfigBase):
             "hidden": True,
             "label": "配置版本",
             "hint": "配置版本，勿改",
+            **_ui_i18n("Config version", "Config version, do not edit."),
         },
     )
 
@@ -135,6 +168,9 @@ class BalanceQueryConfig(PluginConfigBase):
     """查询配置（balance 配置节：要查询余额的 API 平台及其凭据。"""
 
     __ui_label__ = "查询配置"
+    __ui_i18n__: ClassVar[Dict[str, Dict[str, str]]] = {
+        "en": {"title": "Balance Query", "description": "API platform and credentials for balance queries."}
+    }
     __ui_icon__ = "account_balance_wallet"
     __ui_order__ = 1
 
@@ -147,6 +183,7 @@ class BalanceQueryConfig(PluginConfigBase):
         json_schema_extra={
             "label": "查询 API Key（余额平台凭据）",
             "hint": "余额查询平台 API Key",
+            **_ui_i18n("Query API Key (balance platform)", "API key of the balance query platform."),
         },
     )
     api_url: str = Field(
@@ -155,6 +192,7 @@ class BalanceQueryConfig(PluginConfigBase):
         json_schema_extra={
             "label": "余额查询接口 URL（GET）",
             "hint": "余额查询接口地址",
+            **_ui_i18n("Balance endpoint URL (GET)", "Balance query endpoint URL."),
         },
     )
     auth_header: str = Field(
@@ -169,6 +207,7 @@ class BalanceQueryConfig(PluginConfigBase):
         json_schema_extra={
             "label": "认证方式（余额接口）",
             "hint": "余额接口认证方式",
+            **_ui_i18n("Auth method (balance API)", "Auth header spec for the balance API."),
         },
     )
 
@@ -177,6 +216,9 @@ class SummaryConfig(PluginConfigBase):
     """总结配置（summary 配置节：把余额 JSON 交给 LLM 总结的模型平台及其凭据。"""
 
     __ui_label__ = "总结配置"
+    __ui_i18n__: ClassVar[Dict[str, Dict[str, str]]] = {
+        "en": {"title": "Summary Settings", "description": "LLM platform and credentials used to summarize the balance JSON."}
+    }
     __ui_icon__ = "smart_toy"
     __ui_order__ = 2
 
@@ -189,17 +231,20 @@ class SummaryConfig(PluginConfigBase):
         json_schema_extra={
             "label": "总结 API Key（模型平台凭据）",
             "hint": "总结用模型 API Key",
+            **_ui_i18n("Summary API Key (LLM platform)", "API key for the summary LLM."),
         },
     )
     summary_model: str = Field(
         default=DEFAULT_SUMMARY_MODEL,
         description=(
             "总结余额 JSON 的模型名（模型接口中的 model 字段）。"
-            "默认使用余额获取平台所提供的模型（deepseek v4 flash）"
+            "默认 deepseek-chat 为 DeepSeek 开放平台真实模型 ID；"
+            "使用其他平台时请按该平台填写真实存在的模型名"
         ),
         json_schema_extra={
             "label": "总结模型名",
             "hint": "总结用模型名",
+            **_ui_i18n("Summary model name", "Model used for summarization."),
         },
     )
     client_type: str = Field(
@@ -213,6 +258,7 @@ class SummaryConfig(PluginConfigBase):
         json_schema_extra={
             "label": "客户端兼容格式",
             "hint": "接口兼容格式",
+            **_ui_i18n("Client format", "API compatibility format of the model endpoint."),
         },
     )
     llm_url: str = Field(
@@ -229,6 +275,21 @@ class SummaryConfig(PluginConfigBase):
         json_schema_extra={
             "label": "模型接口 URL",
             "hint": "模型接口地址",
+            **_ui_i18n("LLM endpoint URL", "Model API endpoint URL."),
+        },
+    )
+    llm_allowed_hosts: List[str] = Field(
+        default_factory=list,
+        description=(
+            "模型接口主机白名单（可选，留空不启用）。"
+            "启用后 llm_url 的主机名必须在该列表内（不区分大小写），"
+            "进一步收紧出站目标。无论是否启用，llm_url 均强制 https "
+            "并拦截私网/环回/链路本地/云元数据地址（与余额接口同一套防护）"
+        ),
+        json_schema_extra={
+            "label": "模型接口主机白名单",
+            "hint": "留空不启用；启用后仅允许列表内主机",
+            **_ui_i18n("LLM host whitelist", "Optional hostname whitelist for the LLM endpoint URL."),
         },
     )
     auth_header: str = Field(
@@ -243,6 +304,7 @@ class SummaryConfig(PluginConfigBase):
         json_schema_extra={
             "label": "认证方式（模型接口）",
             "hint": "模型接口认证方式",
+            **_ui_i18n("Auth method (LLM API)", "Auth header spec for the LLM API."),
         },
     )
     max_tokens: int = Field(
@@ -251,6 +313,7 @@ class SummaryConfig(PluginConfigBase):
         json_schema_extra={
             "label": "最大输出 token 数",
             "hint": "最大输出 token 数",
+            **_ui_i18n("Max output tokens", "Maximum output tokens for summarization."),
         },
     )
     send_max_tokens: bool = Field(
@@ -263,6 +326,7 @@ class SummaryConfig(PluginConfigBase):
         json_schema_extra={
             "label": "请求体中发送 max_tokens",
             "hint": "发送 max_tokens",
+            **_ui_i18n("Send max_tokens in request", "Whether to send max_tokens in the request body."),
         },
     )
     llm_timeout: float = Field(
@@ -274,6 +338,7 @@ class SummaryConfig(PluginConfigBase):
         json_schema_extra={
             "label": "LLM 总结超时（秒）",
             "hint": "总结超时（秒）",
+            **_ui_i18n("Summary timeout (seconds)", "LLM summary timeout in seconds."),
         },
     )
     cache_minutes: int = Field(
@@ -287,6 +352,7 @@ class SummaryConfig(PluginConfigBase):
         json_schema_extra={
             "label": "工具缓存间隔（分钟）",
             "hint": "工具缓存间隔（分钟）",
+            **_ui_i18n("Tool cache interval (minutes)", "Cache interval for tool calls, in minutes."),
         },
     )
 
@@ -295,6 +361,9 @@ class PromptSectionConfig(PluginConfigBase):
     """提示词（prompt 配置节：LLM 总结余额 JSON 时使用的提示词模板。"""
 
     __ui_label__ = "提示词"
+    __ui_i18n__: ClassVar[Dict[str, Dict[str, str]]] = {
+        "en": {"title": "Prompt", "description": "Prompt template for LLM summarization."}
+    }
     __ui_icon__ = "notes"
     __ui_order__ = 3
 
@@ -307,6 +376,7 @@ class PromptSectionConfig(PluginConfigBase):
         json_schema_extra={
             "label": "总结提示词行",
             "hint": "总结提示词，每行一项",
+            **_ui_i18n("Prompt lines", "One prompt line per item."),
         },
     )
 
@@ -419,47 +489,24 @@ class ApiBalancePlugin(MaiBotPlugin):
     # ==================== 余额获取 ====================
 
     @staticmethod
-    def _validate_balance_url(api_url: str) -> str:
-        """校验余额接口 URL 安全性，返回规范化后的 URL。
+    async def _validate_balance_url(api_url: str) -> str:
+        """校验余额接口 URL 安全性，返回校验通过的 URL。
 
-        安全约束（防 SSRF / Key 泄露）：
-        - 必须是 http/https 且为 https；
-        - 拒绝私网/环回/链路本地/云元数据地址（如 127.0.0.1、10.x、169.254.169.254）；
-        - 拒绝带用户名密码的 URL。
-        不满足时抛 ValueError。
+        走 url_guard.check_url 统一护栏（防 SSRF / Key 泄露）：
+        - 仅允许 https；
+        - 拒绝 URL 内嵌用户名/密码；
+        - DNS 解析在线程池内执行（不阻塞事件循环），解析出的全部 IP
+          逐一判黑：私网/环回/链路本地（含 169.254.169.254 云元数据）/
+          CGNAT/组播/保留/未指定地址（IPv4 + IPv6，含 v4-mapped）。
+        失败抛 UrlGuardError（str 已脱敏，可安全回显）。
+
+        已知边界（TOCTOU / DNS rebinding）：校验时解析的 IP 与 httpx
+        实际请求时再次解析的 IP 之间存在 DNS 变更窗口；因 httpx 无法
+        在请求时钉住校验过的 IP，此处仅"解析全量 IP 逐个判黑"尽力收敛，
+        残留窗口见 README「安全说明」。
         """
         url = str(api_url or "").strip()
-        if not url:
-            raise ValueError("余额接口 URL 为空")
-        parsed = urlparse(url)
-        if parsed.scheme != "https":
-            raise ValueError(f"余额接口仅允许 https，当前: {parsed.scheme or '无'}")
-        if parsed.username or parsed.password:
-            raise ValueError("余额接口 URL 不允许包含用户名/密码")
-        host = parsed.hostname
-        if not host:
-            raise ValueError("余额接口 URL 缺少主机名")
-        # 解析主机名对应的 IP（禁止私网/环回/链路本地/云元数据）
-        try:
-            infos = socket.getaddrinfo(host, None)
-        except socket.gaierror:
-            raise ValueError(f"余额接口域名无法解析: {host}")
-        for info in infos:
-            ip = info[4][0]
-            try:
-                addr = ipaddress.ip_address(ip)
-            except ValueError:
-                continue
-            if (
-                addr.is_private
-                or addr.is_loopback
-                or addr.is_link_local
-                or addr.is_multicast
-                or addr.is_reserved
-                or addr.is_unspecified
-                or (addr.is_global and str(addr).startswith("169.254."))
-            ):
-                raise ValueError(f"余额接口地址不允许访问: {host} ({ip})")
+        await check_url(url, allowed_schemes=("https",))
         return url
 
     async def _fetch_balance(self, api_key: str, api_url: str) -> Dict[str, Any]:
@@ -467,7 +514,7 @@ class ApiBalancePlugin(MaiBotPlugin):
 
         先做 URL 安全校验（仅 https、拒绝私网/元数据地址），防 SSRF 与 Key 泄露。
         """
-        safe_url = self._validate_balance_url(api_url)
+        safe_url = await self._validate_balance_url(api_url)
         headers = self._build_auth_headers(api_key, self.config.balance.auth_header)
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
             resp = await client.get(safe_url, headers=headers)
@@ -681,6 +728,20 @@ class ApiBalancePlugin(MaiBotPlugin):
 
         url, headers, payload = self._build_llm_request(prompt, summary_api_key)
 
+        # summary.llm_url 同样是携带凭据（summary api_key）的出站请求，
+        # 与 balance.api_url 对称走同一套 SSRF 护栏（仅 https + 私网/元数据拦截；
+        # 配置了 llm_allowed_hosts 白名单时额外限制目标主机）。
+        # TOCTOU 残留窗口与 _validate_balance_url 相同，见 README「安全说明」。
+        allowed_hosts = tuple(
+            str(h).strip().rstrip(".")
+            for h in (self.config.summary.llm_allowed_hosts or [])
+            if str(h).strip()
+        )
+        try:
+            await check_url(url, allowed_schemes=("https",), allowed_hosts=allowed_hosts or None)
+        except UrlGuardError as e:
+            raise LLMError(str(e))
+
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
                 resp = await client.post(url, json=payload, headers=headers)
@@ -741,17 +802,32 @@ class ApiBalancePlugin(MaiBotPlugin):
         return {}
 
     def _write_cache(self, summary: str, raw_json: str) -> None:
-        """写入缓存：AI 总结、原始 JSON 与时间戳（当前时间）。"""
+        """写入缓存：AI 总结、原始 JSON 与时间戳（当前时间）。
+
+        先写临时文件再 os.replace 原子替换，避免读到半截 JSON；
+        临时文件以 0o600 创建（Windows 上尽力而为），限制同机其他用户读取。
+        """
+        tmp_path = ""
         try:
-            os.makedirs(self._get_data_dir(), exist_ok=True)
+            data_dir = self._get_data_dir()
+            os.makedirs(data_dir, exist_ok=True)
             cache = {
                 "summary": summary,
                 "raw_json": raw_json,
                 "timestamp": int(time.time()),
             }
-            with open(self._cache_file(), "w", encoding="utf-8") as f:
-                json.dump(cache, f, ensure_ascii=False, indent=2)
+            payload = json.dumps(cache, ensure_ascii=False, indent=2)
+            tmp_path = self._cache_file() + ".tmp"
+            fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(payload)
+            os.replace(tmp_path, self._cache_file())
         except Exception as e:
+            if tmp_path:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
             self.ctx.logger.warning("写入余额缓存失败：%s", e)
 
     def _cache_fresh(self, cache: Dict[str, Any]) -> bool:
@@ -838,14 +914,16 @@ class ApiBalancePlugin(MaiBotPlugin):
         try:
             result = await self._fetch_and_summarize()
         except LLMTimeoutError as e:
+            # 工具返回会进入 LLM 上下文并可能复述到聊天，统一脱敏：
+            # 仅给简短文案，完整异常已进日志
             self.ctx.logger.error("工具调用 get_api_balance：%s", e)
-            return {"success": False, "error": f"余额总结超时：{e}"}
+            return {"success": False, "error": sanitize_error(e, default="余额总结超时，请稍后重试")}
         except LLMError as e:
             self.ctx.logger.error("工具调用 get_api_balance：%s", e)
-            return {"success": False, "error": f"余额总结失败：{e}"}
+            return {"success": False, "error": sanitize_error(e, default="余额总结失败，请查看控制台日志")}
         except Exception as e:
             self.ctx.logger.error("工具调用 get_api_balance：获取余额失败：%s", e)
-            return {"success": False, "error": f"获取余额失败：{e}"}
+            return {"success": False, "error": sanitize_error(e, default="获取余额失败，请查看控制台日志")}
 
         # 3. 返回结果（不含时间戳）
         return {
@@ -879,20 +957,28 @@ class ApiBalancePlugin(MaiBotPlugin):
             return False, "未配置余额接口 URL", 1
 
         # 实时获取余额 + LLM 总结（与工具同链路，且会覆盖/更新本地缓存）
+        # 异常文本可能含上游错误详情/内网主机名，聊天侧只发脱敏话术，
+        # 完整异常已进 logger（sanitize_error 风格：无 URL/IP/状态码）
         try:
             result = await self._fetch_and_summarize()
         except LLMTimeoutError as e:
             self.ctx.logger.error("指令 /wallet：%s", e)
-            await self.ctx.send.text(f"余额总结超时：{e}", stream_id)
-            return False, f"余额总结超时：{e}", 1
+            await self.ctx.send.text(
+                sanitize_error(e, default="余额总结超时，请稍后重试（详情见控制台日志）"), stream_id
+            )
+            return False, "余额总结超时", 1
         except LLMError as e:
             self.ctx.logger.error("指令 /wallet：%s", e)
-            await self.ctx.send.text(f"余额总结失败：{e}", stream_id)
-            return False, f"余额总结失败：{e}", 1
+            await self.ctx.send.text(
+                sanitize_error(e, default="余额总结失败，请查看控制台日志"), stream_id
+            )
+            return False, "余额总结失败", 1
         except Exception as e:
             self.ctx.logger.error("指令 /wallet：获取余额失败：%s", e)
-            await self.ctx.send.text(f"余额查询失败：{e}", stream_id)
-            return False, f"余额查询失败：{e}", 1
+            await self.ctx.send.text(
+                sanitize_error(e, default="余额查询失败，请查看控制台日志"), stream_id
+            )
+            return False, "余额查询失败", 1
 
         summary = result["summary"]
 
